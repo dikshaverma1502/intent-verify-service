@@ -1,68 +1,79 @@
 const express = require('express');
-const bodyParser = require('body-parser');
-const cors = require('cors');
-
+const jwt = require('jsonwebtoken');
 const app = express();
-const PORT = 5000;
+app.use(express.json());
 
-app.use(cors());
-app.use(bodyParser.json());
+const VERIFIER_URL = "https://verifier.example.com";
 
-// Mock Authorization Endpoint
-app.get('/authorize', (req, res) => {
-    const tokenPayload = {
-        client_id: "https://openid4vp-mock.vercel.app",
-        response_type: "vp_token",
-        scope: "openid vp_token",
-        redirect_uri: "walletapp://callback",
-        nonce: "n-0S6_WzA2Mj",
-        state: "af0ifjsldkj",
-        presentation_definition: {
-            id: "cred-req-1",
-            input_descriptors: [
-                {
-                    id: "aadhaar_credential",
-                    name: "Aadhaar Credential",
-                    purpose: "To verify your identity using Aadhaar",
-                    constraints: {
-                        fields: [
-                            {
-                                path: ["$.credentialSubject.id"],
-                                filter: {
-                                    type: "string",
-                                    pattern: "^[0-9]{12}$"
-                                }
-                            }
-                        ]
-                    }
-                }
-            ]
-        }
-    };
+app.post('/intent/verify', (req, res) => {
+    const { token } = req.body;
 
-    // Generate JWT (You can remove this if you want a plain payload instead)
-    const token = JSON.stringify(tokenPayload);
-    res.json({ token });
-});
-
-// Mock Token Verification Endpoint (NO JWT Validation)
-app.post('/verify', (req, res) => {
-    const { vp_token } = req.body;
+    if (!token) {
+        return res.status(400).json({ error: "Token is required" });
+    }
 
     try {
-        // Just parse the payload as JSON and return it
-        const decoded = JSON.parse(vp_token);
+        // Decode the JWT token
+        const decoded = jwt.decode(token, { complete: true });
+        if (!decoded) {
+            return res.status(400).json({ error: "Invalid token" });
+        }
 
-        res.status(200).json({
-            message: "Token accepted (without validation)!",
-            decoded
-        });
-    } catch (err) {
-        res.status(400).json({ message: "Failed to parse the token." });
+        const payload = decoded.payload;
+
+        // Verify the issuer
+        if (payload.iss !== VERIFIER_URL) {
+            return res.status(403).json({ 
+                verification: "failed", 
+                message: "Unauthorized verifier" 
+            });
+        }
+
+        console.log("✅ Verification Success");
+
+        // Extract the requested fields from the presentation definition
+        const requestedFields = payload.presentation_definition.input_descriptors.map(descriptor => descriptor.id);
+
+        // Simulated metadata and field data (replace with actual data fetching logic)
+        const verificationResult = {
+            name: "John Doe",
+            gender: "Male",
+            dob: "1990-05-15"
+        };
+
+        // Return metadata and requested fields
+        const response = {
+            verification: "success",
+            metadata: {
+                issuer: payload.iss,
+                audience: payload.aud,
+                nonce: payload.nonce,
+                state: payload.state
+            },
+            requestedFields: requestedFields.reduce((acc, field) => {
+                if (verificationResult[field]) {
+                    acc[field] = verificationResult[field];
+                }
+                return acc;
+            }, {})
+        };
+
+        res.status(200).json(response);
+
+    } catch (error) {
+        console.error(error.message);
+        res.status(500).json({ error: "Server error during verification" });
     }
 });
 
+app.get("/ping",(req,res)=>{
+    res.header("Content-Type", "application/x-pem-file");
+    res.send("pong")
+    
+})
+
 // Start the server
+const PORT = 3000;
 app.listen(PORT, () => {
-    console.log(`Server is running on http://localhost:${PORT}`);
+    console.log(`Intent Verify Service is running on http://localhost:${PORT}`);
 });
