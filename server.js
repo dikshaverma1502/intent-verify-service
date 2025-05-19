@@ -1,79 +1,100 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
+const fs = require('fs');
+
 const app = express();
 app.use(express.json());
 
 const VERIFIER_URL = "https://verifier.example.com";
 
+// Load your public key (make sure path and encoding are correct)
+const PUBLIC_KEY = fs.readFileSync('./keys/public.key', 'utf8');
+
+// Function to verify JWT using RS256
+function verifyJwt(token) {
+  try {
+    return jwt.verify(token, PUBLIC_KEY, { algorithms: ['RS256'] });
+  } catch (err) {
+    typeof(token)
+    console.error('JWT Verification Failed:', err.message);
+    throw err;
+  }
+}
+
 app.post('/intent/verify', (req, res) => {
-    const { token } = req.body;
+  const { authorization_request } = req.body;
+  console.log(typeof(authorization_request))
 
-    if (!token) {
-        return res.status(400).json({ error: "Token is required" });
+  if (!authorization_request) {
+    return res.status(400).json({ error: 'authorization_request is required' });
+  }
+
+  // authorization_request is the JWT string
+  const token = authorization_request.authorization_request;
+  console.log(token)
+
+  try {
+    const payload = verifyJwt(token);
+
+    console.log(payload)
+
+    // Check issuer for extra security
+    if (payload.client_id !== VERIFIER_URL) {
+      return res.status(403).json({
+        verification: 'failed',
+        message: 'Unauthorized verifier',
+      });
     }
 
-    try {
-        // Decode the JWT token
-        const decoded = jwt.decode(token, { complete: true });
-        if (!decoded) {
-            return res.status(400).json({ error: "Invalid token" });
-        }
+    console.log('✅ JWT Payload:', payload);
 
-        const payload = decoded.payload;
+    // Map input descriptor IDs to claim names
+    const descriptorToFieldMapping = {
+      'aadhaar_credential': 'aadhaar_id',
+      'name-cred': 'name',
+      'gender-cred': 'gender',
+      'dob-cred': 'dob',
+    };
 
-        // Verify the issuer
-        if (payload.iss !== VERIFIER_URL) {
-            return res.status(403).json({ 
-                verification: "failed", 
-                message: "Unauthorized verifier" 
-            });
-        }
+    // Extract requested descriptors IDs from the JWT payload
+    const requestedDescriptors = payload.presentation_definition.input_descriptors.map(d => d.id);
 
-        console.log("✅ Verification Success");
+    // Simulated verification data (replace with your own logic)
+    const verificationResult = {
+      aadhaar_id: '123412341234',
+      name: 'John Doe',
+      gender: 'Male',
+      dob: '1990-05-15',
+    };
 
-        // Extract the requested fields from the presentation definition
-        const requestedFields = payload.presentation_definition.input_descriptors.map(descriptor => descriptor.id);
+    // Prepare only requested fields for response
+    const requestedFields = requestedDescriptors.reduce((acc, descId) => {
+      const field = descriptorToFieldMapping[descId];
+      if (field && verificationResult[field]) {
+        acc[descId] = verificationResult[field];
+      }
+      return acc;
+    }, {});
 
-        // Simulated metadata and field data (replace with actual data fetching logic)
-        const verificationResult = {
-            name: "John Doe",
-            gender: "Male",
-            dob: "1990-05-15"
-        };
+    // Send verification success response
+    return res.json({
+      verification: 'success',
+      metadata: {
+        issuer: payload.iss,
+        audience: payload.aud,
+        nonce: payload.nonce,
+        state: payload.state,
+      },
+      requestedFields,
+    });
 
-        // Return metadata and requested fields
-        const response = {
-            verification: "success",
-            metadata: {
-                issuer: payload.iss,
-                audience: payload.aud,
-                nonce: payload.nonce,
-                state: payload.state
-            },
-            requestedFields: requestedFields.reduce((acc, field) => {
-                if (verificationResult[field]) {
-                    acc[field] = verificationResult[field];
-                }
-                return acc;
-            }, {})
-        };
-
-        res.status(200).json(response);
-
-    } catch (error) {
-        console.error(error.message);
-        res.status(500).json({ error: "Server error during verification" });
-    }
+  } catch (err) {
+    console.error('Verification failed:', err.message);
+    return res.status(500).json({ error: 'Server error during verification' });
+  }
 });
 
-app.get("/ping",(req,res)=>{
-    res.header("Content-Type", "application/x-pem-file");
-    res.send("pong")
-    
-})
-
-// Start the server
 const PORT = 3000;
 app.listen(PORT, () => {
-    console.log(`Intent Verify Service is running on http://localhost:${PORT}`);
+  console.log(`Intent Verify Service listening on http://localhost:${PORT}`);
 });
